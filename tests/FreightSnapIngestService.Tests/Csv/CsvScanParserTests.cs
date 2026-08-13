@@ -8,48 +8,44 @@ public class CsvScanParserTests
     private readonly CsvScanParser _parser = new();
 
     [Fact]
-    public void Parses_a_valid_row_into_a_ScanRecord()
+    public void Parses_a_valid_headerless_row_into_a_ScanRecord()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n";
+        var csv = "724076,20260804144415,122.0,101.5,128.5,1.591216,216.000\n";
 
         var result = _parser.Parse(csv);
 
-        Assert.Equal("012345678905", result.Barcode);
-        Assert.Equal(new DateTime(2026, 8, 13, 9, 15, 0), result.ScanDateTime);
-        Assert.Equal(12.5m, result.Length);
-        Assert.Equal(8.0m, result.Width);
-        Assert.Equal(6.25m, result.Height);
-        Assert.Equal(625.0m, result.Volume);
-        Assert.Equal(14.2m, result.Weight);
+        Assert.Equal("724076", result.Barcode);
+        Assert.Equal(new DateTime(2026, 8, 4, 14, 44, 15), result.ScanDateTime);
+        Assert.Equal(122.0m, result.Length);
+        Assert.Equal(101.5m, result.Width);
+        Assert.Equal(128.5m, result.Height);
+        Assert.Equal(1.591216m, result.Volume);
+        Assert.Equal(216.000m, result.Weight);
     }
 
     [Fact]
-    public void Parses_columns_in_any_order()
+    public void Accepts_a_barcode_field_with_extra_leading_characters_as_is()
     {
-        var csv = "Weight,Barcode,DateTime,Height,Volume,Width,Length\n" +
-                   "14.2,012345678905,2026-08-13T09:15:00,6.25,625.0,8.0,12.5\n";
+        var csv = "vvhjmfvjhfg724076,20260804144524,122.0,101.5,128.5,1.591216,216.000\n";
 
         var result = _parser.Parse(csv);
 
-        Assert.Equal("012345678905", result.Barcode);
-        Assert.Equal(14.2m, result.Weight);
+        Assert.Equal("vvhjmfvjhfg724076", result.Barcode);
     }
 
     [Fact]
-    public void Throws_CsvParseException_when_a_required_column_is_missing()
+    public void Throws_CsvParseException_when_a_field_is_missing()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume\n" +
-                   "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0\n";
+        var csv = "724076,20260804144415,122.0,101.5,128.5,1.591216\n";
 
         var ex = Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
-        Assert.Contains("Weight", ex.Message);
+        Assert.Contains("6 field", ex.Message);
     }
 
     [Fact]
     public void Throws_CsvParseException_when_there_is_no_data_row()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n";
+        var csv = "\n\n";
 
         Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
     }
@@ -57,32 +53,36 @@ public class CsvScanParserTests
     [Fact]
     public void Throws_CsvParseException_when_a_numeric_field_is_not_a_number()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   "012345678905,2026-08-13T09:15:00,not-a-number,8.0,6.25,625.0,14.2\n";
+        var csv = "724076,20260804144415,not-a-number,101.5,128.5,1.591216,216.000\n";
 
         var ex = Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
         Assert.Contains("Length", ex.Message);
     }
 
     [Fact]
-    public void Throws_CsvParseException_when_the_barcode_is_empty()
+    public void Throws_CsvParseException_when_the_barcode_field_is_empty()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   ",2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n";
+        var csv = ",20260804144415,122.0,101.5,128.5,1.591216,216.000\n";
 
         Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
     }
 
     [Fact]
+    public void Throws_CsvParseException_when_the_datetime_is_not_in_the_expected_format()
+    {
+        var csv = "724076,2026-08-04T14:44:15,122.0,101.5,128.5,1.591216,216.000\n";
+
+        var ex = Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
+        Assert.Contains("DateTime", ex.Message);
+    }
+
+    [Fact]
     public void Skips_blank_lines_and_uses_the_first_non_blank_data_row()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   "\n" +
-                   "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n" +
-                   "\n";
+        var csv = "\n724076,20260804144415,122.0,101.5,128.5,1.591216,216.000\n\n";
 
         var result = _parser.Parse(csv);
 
-        Assert.Equal("012345678905", result.Barcode);
+        Assert.Equal("724076", result.Barcode);
     }
 }
