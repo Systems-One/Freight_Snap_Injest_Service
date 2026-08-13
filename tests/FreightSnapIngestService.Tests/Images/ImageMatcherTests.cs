@@ -54,4 +54,26 @@ public class ImageMatcherTests : IDisposable
 
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void Does_not_match_a_shorter_barcode_that_is_a_substring_of_a_longer_one()
+    {
+        // Real production data has this collision: barcode "555" is a literal substring of "5555".
+        Touch("5555_20260807_151343_1.jpg");
+
+        var result = _matcher.FindMatchingImages(_dir, "555");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void Matches_a_barcode_delimited_by_non_digit_characters_even_when_a_colliding_longer_barcode_is_present()
+    {
+        var match = Touch("555_20260807_151435_1.jpg");
+        Touch("5555_20260807_151343_1.jpg");
+
+        var result = _matcher.FindMatchingImages(_dir, "555");
+
+        Assert.Equal(new[] { match }, result);
+    }
 }

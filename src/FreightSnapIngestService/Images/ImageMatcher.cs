@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace FreightSnapIngestService.Images;
 
 public interface IImageMatcher
@@ -12,8 +14,10 @@ public class ImageMatcher : IImageMatcher
         if (!Directory.Exists(imageDirectory))
             return Array.Empty<string>();
 
+        var pattern = $@"(?<!\d){Regex.Escape(barcode)}(?!\d)";
+
         return Directory.EnumerateFiles(imageDirectory)
-            .Where(path => Path.GetFileName(path).Contains(barcode, StringComparison.OrdinalIgnoreCase))
+            .Where(path => Regex.IsMatch(Path.GetFileName(path), pattern, RegexOptions.IgnoreCase))
             .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
