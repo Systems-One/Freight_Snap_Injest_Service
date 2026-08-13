@@ -2337,22 +2337,26 @@ public class EndToEndIngestionTests : IClassFixture<SqlServerTestFixture>, IDisp
         return path;
     }
 
-    private async Task<(DateTime? ScanDateTime, string? CsvPath, int ImageCount)> ReadScanAsync(string barcode)
+    private async Task<(DateTime? ScanDateTime, decimal? Length, decimal? Width, decimal? Height, decimal? Weight, string? CsvPath, int ImageCount)> ReadScanAsync(string barcode)
     {
         await using var conn = new SqlConnection(_sqlFixture.ConnectionString);
         await conn.OpenAsync();
 
         await using var scanCmd = conn.CreateCommand();
         scanCmd.CommandText =
-            "SELECT TOP 1 Id, ScanDateTime, CsvPath FROM dbo.FreightScans WHERE Barcode = @Barcode ORDER BY Id DESC";
+            "SELECT TOP 1 Id, ScanDateTime, Length, Width, Height, Weight, CsvPath FROM dbo.FreightScans WHERE Barcode = @Barcode ORDER BY Id DESC";
         scanCmd.Parameters.AddWithValue("@Barcode", barcode);
         await using var reader = await scanCmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
-            return (null, null, 0);
+            return (null, null, null, null, null, null, 0);
 
         var scanId = reader.GetInt64(0);
         var scanDateTime = reader.GetDateTime(1);
-        var csvPath = reader.IsDBNull(2) ? null : reader.GetString(2);
+        var length = reader.IsDBNull(2) ? (decimal?)null : reader.GetDecimal(2);
+        var width = reader.IsDBNull(3) ? (decimal?)null : reader.GetDecimal(3);
+        var height = reader.IsDBNull(4) ? (decimal?)null : reader.GetDecimal(4);
+        var weight = reader.IsDBNull(5) ? (decimal?)null : reader.GetDecimal(5);
+        var csvPath = reader.IsDBNull(6) ? null : reader.GetString(6);
         await reader.CloseAsync();
 
         await using var imageCmd = conn.CreateCommand();
@@ -2360,7 +2364,7 @@ public class EndToEndIngestionTests : IClassFixture<SqlServerTestFixture>, IDisp
         imageCmd.Parameters.AddWithValue("@Id", scanId);
         var imageCount = (int)(await imageCmd.ExecuteScalarAsync())!;
 
-        return (scanDateTime, csvPath, imageCount);
+        return (scanDateTime, length, width, height, weight, csvPath, imageCount);
     }
 
     [Fact]
@@ -2441,21 +2445,29 @@ public class EndToEndIngestionTests : IClassFixture<SqlServerTestFixture>, IDisp
     [Fact]
     public async Task Retention_clears_file_paths_but_keeps_the_scan_row_after_files_expire()
     {
-        WriteCsv("scan.csv", "714826,20260812213052,114.0,103.0,167.5,1.966785,215.000\n");
-        WriteImage("714826_20260812_213100_1.jpg");
+        // Uses a distinct barcode from the truncated-row test above: both tests share one
+        // SqlServerTestFixture database (IClassFixture is instantiated once per class), so
+        // reusing a barcode+timestamp across tests would make correctness depend on xunit's
+        // (unguaranteed) method execution order.
+        WriteCsv("scan.csv", "695774,20260812213052,114.0,103.0,167.5,1.966785,215.000\n");
+        WriteImage("695774_20260812_213100_1.jpg");
 
         await _pipeline.ProcessOnceAsync(CancellationToken.None);
         await _pipeline.ProcessOnceAsync(CancellationToken.None);
 
-        var processedFolder = Path.Combine(_options.ProcessedDirectory, "714826_20260812213052");
+        var processedFolder = Path.Combine(_options.ProcessedDirectory, "695774_20260812213052");
         Directory.SetLastWriteTimeUtc(processedFolder, DateTime.UtcNow.AddDays(-31));
         _time.SetUtcNow(DateTimeOffset.UtcNow);
 
         await _retentionCleaner.RunOnceAsync(CancellationToken.None);
 
         Assert.False(Directory.Exists(processedFolder));
-        var scan = await ReadScanAsync("714826");
+        var scan = await ReadScanAsync("695774");
         Assert.Equal(new DateTime(2026, 8, 12, 21, 30, 52), scan.ScanDateTime); // scan row still present
+        Assert.Equal(114.0m, scan.Length); // dimension data survives retention untouched
+        Assert.Equal(103.0m, scan.Width);
+        Assert.Equal(167.5m, scan.Height);
+        Assert.Equal(215.000m, scan.Weight);
         Assert.Null(scan.CsvPath); // path cleared
         Assert.Equal(0, scan.ImageCount); // image rows cleared
     }
