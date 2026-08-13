@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-FreightSnapIngestService-581205fb-a27d-4e34-adff-8c51c7df044a</UserSecretsId>
+    <UseWindowsService>true</UseWindowsService>
   </PropertyGroup>
 
   <ItemGroup>
