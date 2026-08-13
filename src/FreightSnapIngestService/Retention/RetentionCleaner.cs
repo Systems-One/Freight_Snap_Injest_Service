@@ -6,7 +6,8 @@ namespace FreightSnapIngestService.Retention;
 public class RetentionCleaner(
     FreightIngestOptions options,
     IFreightScanRepository repository,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<RetentionCleaner> logger)
 {
     public async Task RunOnceAsync(CancellationToken ct)
     {
@@ -19,8 +20,24 @@ public class RetentionCleaner(
                 if (Directory.GetLastWriteTimeUtc(folder) >= cutoff)
                     continue;
 
-                Directory.Delete(folder, recursive: true);
-                await repository.ClearPathsUnderFolderAsync(folder, ct);
+                try
+                {
+                    // Clear the DB paths BEFORE deleting the folder from disk. If the DB call
+                    // throws (e.g. a transient SQL issue), the folder is left untouched and
+                    // still expired, so it is simply retried on the next hourly pass —
+                    // ClearPathsUnderFolderAsync is idempotent, so re-clearing already-cleared
+                    // paths is a harmless no-op. Deleting the folder first would instead leave
+                    // DB rows pointing at files that no longer exist, forever, since a deleted
+                    // folder can never be re-discovered by EnumerateDirectories.
+                    await repository.ClearPathsUnderFolderAsync(folder, ct);
+                    Directory.Delete(folder, recursive: true);
+                }
+                catch (Exception ex)
+                {
+                    // One bad folder (locked file, permission issue, transient DB failure)
+                    // must not abort the rest of the retention pass.
+                    logger.LogError(ex, "Failed to clean up expired processed folder {Folder}; it will be retried next pass.", folder);
+                }
             }
         }
 
@@ -31,7 +48,14 @@ public class RetentionCleaner(
                 if (File.GetLastWriteTimeUtc(file) >= cutoff)
                     continue;
 
-                File.Delete(file);
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to delete expired error file {File}; it will be retried next pass.", file);
+                }
             }
         }
     }

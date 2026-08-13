@@ -51,7 +51,7 @@ public class EndToEndIngestionTests : IClassFixture<SqlServerTestFixture>, IDisp
             new FileStabilityTracker(),
             _repository,
             NullLogger<IngestPipeline>.Instance);
-        _retentionCleaner = new RetentionCleaner(_options, _repository, _time);
+        _retentionCleaner = new RetentionCleaner(_options, _repository, _time, NullLogger<RetentionCleaner>.Instance);
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);

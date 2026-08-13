@@ -36,7 +36,7 @@ public class RetentionWorkerTests : IDisposable
         Directory.CreateDirectory(options.ErrorDirectory);
 
         var time = new FakeTimeProvider();
-        var cleaner = new RetentionCleaner(options, new NoOpFreightScanRepository(), time);
+        var cleaner = new RetentionCleaner(options, new NoOpFreightScanRepository(), time, NullLogger<RetentionCleaner>.Instance);
         var worker = new RetentionWorker(cleaner, time, NullLogger<RetentionWorker>.Instance);
 
         await worker.StartAsync(CancellationToken.None);
