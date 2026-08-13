@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- CSV columns, in the order they appear in the spec: `Barcode, DateTime, Length, Width, Height, Volume, Weight`.
+- CSV files are **headerless**, one data line, columns positional in this exact order: `Barcode, DateTime, Length, Width, Height, Volume, Weight` (confirmed against real production CSVs in `Demo_Data/SWAD_FILES/`, e.g. `724076,20260804144415,122.0,101.5,128.5,1.591216,216.000`). `DateTime` is a compact 14-digit `yyyyMMddHHmmss` string with no separators, not ISO-8601. The barcode field is treated as an opaque string with no format validation — noisy/garbage-prefixed barcodes are accepted as-is and simply won't match any image.
+- `ImageMatcher` barcode-in-filename matching must be boundary-bounded, not a raw substring test: shorter barcodes are literal substrings of longer ones in real data (e.g. `555` is a substring of `5555`), so a matched barcode must be delimited by a non-digit character (or string start/end) on both sides in the filename.
 - Poll interval default: 10 seconds (`PollIntervalSeconds`). Pending-image timeout default: 30 minutes (`PendingTimeoutMinutes`). Retention default: 30 days (`RetentionDays`). Retention loop runs hourly.
 - A CSV is only read once its size is unchanged across two consecutive polls.
 - Processed folder name: `<Barcode>_<DateTime:yyyyMMddHHmmss>`. Renamed CSV: `<Barcode>_<DateTime:yyyyMMddHHmmss>.csv`. Renamed images: `<Barcode>_<DateTime:yyyyMMddHHmmss>_<n><original-extension>`, `n` starting at 1.
@@ -266,6 +267,8 @@ git commit -m "chore: scaffold FreightSnapIngestService project and configuratio
 - Produces: `class CsvParseException(string message) : Exception(message)`.
 - Produces: `interface ICsvScanParser { ScanRecord Parse(string csvContent); }` implemented by `class CsvScanParser : ICsvScanParser`.
 
+Real production CSVs (see `Demo_Data/SWAD_FILES/*.csv`) are **headerless**: one data line, fields positional in the fixed order `Barcode, DateTime, Length, Width, Height, Volume, Weight`, e.g. `724076,20260804144415,122.0,101.5,128.5,1.591216,216.000`. `DateTime` is `yyyyMMddHHmmss` (14 digits, no separators). The barcode field is accepted as-is with no format validation — noisy data (e.g. extra leading characters) is a valid barcode string as far as this parser is concerned.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```csharp
@@ -280,48 +283,44 @@ public class CsvScanParserTests
     private readonly CsvScanParser _parser = new();
 
     [Fact]
-    public void Parses_a_valid_row_into_a_ScanRecord()
+    public void Parses_a_valid_headerless_row_into_a_ScanRecord()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n";
+        var csv = "724076,20260804144415,122.0,101.5,128.5,1.591216,216.000\n";
 
         var result = _parser.Parse(csv);
 
-        Assert.Equal("012345678905", result.Barcode);
-        Assert.Equal(new DateTime(2026, 8, 13, 9, 15, 0), result.ScanDateTime);
-        Assert.Equal(12.5m, result.Length);
-        Assert.Equal(8.0m, result.Width);
-        Assert.Equal(6.25m, result.Height);
-        Assert.Equal(625.0m, result.Volume);
-        Assert.Equal(14.2m, result.Weight);
+        Assert.Equal("724076", result.Barcode);
+        Assert.Equal(new DateTime(2026, 8, 4, 14, 44, 15), result.ScanDateTime);
+        Assert.Equal(122.0m, result.Length);
+        Assert.Equal(101.5m, result.Width);
+        Assert.Equal(128.5m, result.Height);
+        Assert.Equal(1.591216m, result.Volume);
+        Assert.Equal(216.000m, result.Weight);
     }
 
     [Fact]
-    public void Parses_columns_in_any_order()
+    public void Accepts_a_barcode_field_with_extra_leading_characters_as_is()
     {
-        var csv = "Weight,Barcode,DateTime,Height,Volume,Width,Length\n" +
-                   "14.2,012345678905,2026-08-13T09:15:00,6.25,625.0,8.0,12.5\n";
+        var csv = "vvhjmfvjhfg724076,20260804144524,122.0,101.5,128.5,1.591216,216.000\n";
 
         var result = _parser.Parse(csv);
 
-        Assert.Equal("012345678905", result.Barcode);
-        Assert.Equal(14.2m, result.Weight);
+        Assert.Equal("vvhjmfvjhfg724076", result.Barcode);
     }
 
     [Fact]
-    public void Throws_CsvParseException_when_a_required_column_is_missing()
+    public void Throws_CsvParseException_when_a_field_is_missing()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume\n" +
-                   "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0\n";
+        var csv = "724076,20260804144415,122.0,101.5,128.5,1.591216\n";
 
         var ex = Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
-        Assert.Contains("Weight", ex.Message);
+        Assert.Contains("6 field", ex.Message);
     }
 
     [Fact]
     public void Throws_CsvParseException_when_there_is_no_data_row()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n";
+        var csv = "\n\n";
 
         Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
     }
@@ -329,33 +328,37 @@ public class CsvScanParserTests
     [Fact]
     public void Throws_CsvParseException_when_a_numeric_field_is_not_a_number()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   "012345678905,2026-08-13T09:15:00,not-a-number,8.0,6.25,625.0,14.2\n";
+        var csv = "724076,20260804144415,not-a-number,101.5,128.5,1.591216,216.000\n";
 
         var ex = Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
         Assert.Contains("Length", ex.Message);
     }
 
     [Fact]
-    public void Throws_CsvParseException_when_the_barcode_is_empty()
+    public void Throws_CsvParseException_when_the_barcode_field_is_empty()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   ",2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n";
+        var csv = ",20260804144415,122.0,101.5,128.5,1.591216,216.000\n";
 
         Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
     }
 
     [Fact]
+    public void Throws_CsvParseException_when_the_datetime_is_not_in_the_expected_format()
+    {
+        var csv = "724076,2026-08-04T14:44:15,122.0,101.5,128.5,1.591216,216.000\n";
+
+        var ex = Assert.Throws<CsvParseException>(() => _parser.Parse(csv));
+        Assert.Contains("DateTime", ex.Message);
+    }
+
+    [Fact]
     public void Skips_blank_lines_and_uses_the_first_non_blank_data_row()
     {
-        var csv = "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-                   "\n" +
-                   "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n" +
-                   "\n";
+        var csv = "\n724076,20260804144415,122.0,101.5,128.5,1.591216,216.000\n\n";
 
         var result = _parser.Parse(csv);
 
-        Assert.Equal("012345678905", result.Barcode);
+        Assert.Equal("724076", result.Barcode);
     }
 }
 ```
@@ -407,63 +410,50 @@ public interface ICsvScanParser
 
 public class CsvScanParser : ICsvScanParser
 {
-    private static readonly string[] RequiredColumns =
-        { "Barcode", "DateTime", "Length", "Width", "Height", "Volume", "Weight" };
+    private const int ExpectedFieldCount = 7;
+    private const string DateTimeFormat = "yyyyMMddHHmmss";
 
     public ScanRecord Parse(string csvContent)
     {
-        var lines = csvContent
+        var dataLine = csvContent
             .Split('\n')
             .Select(l => l.TrimEnd('\r'))
-            .ToList();
+            .FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
 
-        if (lines.Count == 0 || string.IsNullOrWhiteSpace(lines[0]))
-            throw new CsvParseException("CSV has no header row.");
-
-        var headers = lines[0].Split(',').Select(h => h.Trim()).ToArray();
-        var columnIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < headers.Length; i++)
-            columnIndex[headers[i]] = i;
-
-        foreach (var required in RequiredColumns)
-        {
-            if (!columnIndex.ContainsKey(required))
-                throw new CsvParseException($"CSV is missing required column '{required}'.");
-        }
-
-        var dataLine = lines.Skip(1).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
         if (dataLine is null)
             throw new CsvParseException("CSV has no data row.");
 
-        var fields = dataLine.Split(',');
+        var fields = dataLine.Split(',').Select(f => f.Trim()).ToArray();
+        if (fields.Length != ExpectedFieldCount)
+            throw new CsvParseException(
+                $"CSV data row has {fields.Length} field(s); expected {ExpectedFieldCount} " +
+                "(Barcode, DateTime, Length, Width, Height, Volume, Weight).");
 
-        string Field(string column) => fields[columnIndex[column]].Trim();
+        var barcode = fields[0];
+        if (string.IsNullOrWhiteSpace(barcode))
+            throw new CsvParseException("Barcode field is empty.");
 
-        decimal? ParseDecimal(string column)
+        var dateTimeRaw = fields[1];
+        if (!DateTime.TryParseExact(
+                dateTimeRaw, DateTimeFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var scanDateTime))
+            throw new CsvParseException($"DateTime field value '{dateTimeRaw}' is not a valid '{DateTimeFormat}' date/time.");
+
+        decimal? ParseDecimal(string fieldName, string raw)
         {
-            var raw = Field(column);
             if (string.IsNullOrWhiteSpace(raw)) return null;
             if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var value))
-                throw new CsvParseException($"Column '{column}' value '{raw}' is not a valid number.");
+                throw new CsvParseException($"{fieldName} field value '{raw}' is not a valid number.");
             return value;
         }
-
-        var barcode = Field("Barcode");
-        if (string.IsNullOrWhiteSpace(barcode))
-            throw new CsvParseException("Barcode column is empty.");
-
-        var dateTimeRaw = Field("DateTime");
-        if (!DateTime.TryParse(dateTimeRaw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var scanDateTime))
-            throw new CsvParseException($"Column 'DateTime' value '{dateTimeRaw}' is not a valid date/time.");
 
         return new ScanRecord(
             barcode,
             scanDateTime,
-            ParseDecimal("Length"),
-            ParseDecimal("Width"),
-            ParseDecimal("Height"),
-            ParseDecimal("Volume"),
-            ParseDecimal("Weight"));
+            ParseDecimal("Length", fields[2]),
+            ParseDecimal("Width", fields[3]),
+            ParseDecimal("Height", fields[4]),
+            ParseDecimal("Volume", fields[5]),
+            ParseDecimal("Weight", fields[6]));
     }
 }
 ```
@@ -471,7 +461,7 @@ public class CsvScanParser : ICsvScanParser
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `dotnet test tests/FreightSnapIngestService.Tests --filter CsvScanParserTests`
-Expected: PASS (7 tests)
+Expected: PASS (8 tests)
 
 - [ ] **Step 6: Commit**
 
@@ -489,7 +479,7 @@ git commit -m "feat: parse freight scan CSV rows into ScanRecord"
 - Test: `tests/FreightSnapIngestService.Tests/Images/ImageMatcherTests.cs`
 
 **Interfaces:**
-- Produces: `interface IImageMatcher { IReadOnlyList<string> FindMatchingImages(string imageDirectory, string barcode); }` implemented by `class ImageMatcher : IImageMatcher`. Returns full file paths, sorted ascending by file name, for files whose name contains the barcode.
+- Produces: `interface IImageMatcher { IReadOnlyList<string> FindMatchingImages(string imageDirectory, string barcode); }` implemented by `class ImageMatcher : IImageMatcher`. Returns full file paths, sorted ascending by file name, for files whose name contains the barcode **as a digit-delimited match** — the barcode must be preceded and followed by a non-digit character or the string boundary, not merely a raw substring. Real production image filenames (`Demo_Data/Images/`) include barcodes like `555`, `5555`, and `55` side by side, where a naive substring match would make a shorter barcode incorrectly match a longer one's images.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -551,6 +541,28 @@ public class ImageMatcherTests : IDisposable
 
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void Does_not_match_a_shorter_barcode_that_is_a_substring_of_a_longer_one()
+    {
+        // Real production data has this collision: barcode "555" is a literal substring of "5555".
+        Touch("5555_20260807_151343_1.jpg");
+
+        var result = _matcher.FindMatchingImages(_dir, "555");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void Matches_a_barcode_delimited_by_non_digit_characters_even_when_a_colliding_longer_barcode_is_present()
+    {
+        var match = Touch("555_20260807_151435_1.jpg");
+        Touch("5555_20260807_151343_1.jpg");
+
+        var result = _matcher.FindMatchingImages(_dir, "555");
+
+        Assert.Equal(new[] { match }, result);
+    }
 }
 ```
 
@@ -563,6 +575,8 @@ Expected: FAIL (compile error — `ImageMatcher` does not exist)
 
 ```csharp
 // src/FreightSnapIngestService/Images/ImageMatcher.cs
+using System.Text.RegularExpressions;
+
 namespace FreightSnapIngestService.Images;
 
 public interface IImageMatcher
@@ -577,8 +591,10 @@ public class ImageMatcher : IImageMatcher
         if (!Directory.Exists(imageDirectory))
             return Array.Empty<string>();
 
+        var pattern = $@"(?<!\d){Regex.Escape(barcode)}(?!\d)";
+
         return Directory.EnumerateFiles(imageDirectory)
-            .Where(path => Path.GetFileName(path).Contains(barcode, StringComparison.OrdinalIgnoreCase))
+            .Where(path => Regex.IsMatch(Path.GetFileName(path), pattern, RegexOptions.IgnoreCase))
             .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -588,7 +604,7 @@ public class ImageMatcher : IImageMatcher
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `dotnet test tests/FreightSnapIngestService.Tests --filter ImageMatcherTests`
-Expected: PASS (3 tests)
+Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1150,6 +1166,39 @@ public class FreightScanRepositoryTests : IClassFixture<SqlServerTestFixture>
         var imageCount = (int)(await imageCmd.ExecuteScalarAsync())!;
         Assert.Equal(0, imageCount);
     }
+
+    [Fact]
+    public async Task ClearPathsUnderFolderAsync_does_not_clear_a_different_scan_whose_path_only_matches_via_the_underscore_wildcard()
+    {
+        // SQL LIKE treats '_' as "match any single character." The real folder-naming
+        // convention is "{barcode}_{timestamp}", so every prefix contains underscores —
+        // ClearPathsUnderFolderAsync must escape them, or a prefix like ".../AAA_1" would
+        // also match an unrelated path like ".../AAAX1" purely via wildcard substitution.
+        var repository = new FreightScanRepository(_fixture.ConnectionString);
+        var targetFolder = @"C:\FreightSnap\processed\AAA_1";
+        var targetCsvPath = $@"{targetFolder}\AAA_1.csv";
+        var targetScan = Scan with { Barcode = "AAA1TARGET" };
+        var targetScanId = await repository.InsertScanAsync(targetScan, targetCsvPath, Array.Empty<string>(), CancellationToken.None);
+
+        var otherCsvPath = @"C:\FreightSnap\processed\AAAX1\AAAX1.csv"; // same length, '_' replaced by 'X'
+        var otherScan = Scan with { Barcode = "AAAXOTHER" };
+        var otherScanId = await repository.InsertScanAsync(otherScan, otherCsvPath, Array.Empty<string>(), CancellationToken.None);
+
+        await repository.ClearPathsUnderFolderAsync(targetFolder, CancellationToken.None);
+
+        await using var conn = new SqlConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var targetCmd = conn.CreateCommand();
+        targetCmd.CommandText = "SELECT CsvPath FROM dbo.FreightScans WHERE Id = @Id";
+        targetCmd.Parameters.AddWithValue("@Id", targetScanId);
+        Assert.Equal(DBNull.Value, await targetCmd.ExecuteScalarAsync());
+
+        await using var otherCmd = conn.CreateCommand();
+        otherCmd.CommandText = "SELECT CsvPath FROM dbo.FreightScans WHERE Id = @Id";
+        otherCmd.Parameters.AddWithValue("@Id", otherScanId);
+        Assert.Equal(otherCsvPath, await otherCmd.ExecuteScalarAsync());
+    }
 }
 ```
 
@@ -1223,13 +1272,18 @@ public class FreightScanRepository(string connectionString) : IFreightScanReposi
         await conn.OpenAsync(ct);
         await using var transaction = (SqlTransaction)await conn.BeginTransactionAsync(ct);
 
+        // SQL LIKE treats '_', '%', and '[' as wildcards. The folder-naming convention is
+        // "{barcode}_{timestamp}", so every real prefix contains underscores that must be
+        // escaped — otherwise this could match and clear an unrelated scan's paths.
+        var escapedPrefix = EscapeLikeWildcards(folderPathPrefix);
+
         await using var deleteImages = conn.CreateCommand();
         deleteImages.Transaction = transaction;
         deleteImages.CommandText = """
             DELETE FROM dbo.FreightScanImages
-            WHERE ImagePath LIKE @Prefix + '%';
+            WHERE ImagePath LIKE @Prefix + '%' ESCAPE '\';
             """;
-        deleteImages.Parameters.AddWithValue("@Prefix", folderPathPrefix);
+        deleteImages.Parameters.AddWithValue("@Prefix", escapedPrefix);
         await deleteImages.ExecuteNonQueryAsync(ct);
 
         await using var clearCsvPath = conn.CreateCommand();
@@ -1237,20 +1291,23 @@ public class FreightScanRepository(string connectionString) : IFreightScanReposi
         clearCsvPath.CommandText = """
             UPDATE dbo.FreightScans
             SET CsvPath = NULL
-            WHERE CsvPath LIKE @Prefix + '%';
+            WHERE CsvPath LIKE @Prefix + '%' ESCAPE '\';
             """;
-        clearCsvPath.Parameters.AddWithValue("@Prefix", folderPathPrefix);
+        clearCsvPath.Parameters.AddWithValue("@Prefix", escapedPrefix);
         await clearCsvPath.ExecuteNonQueryAsync(ct);
 
         await transaction.CommitAsync(ct);
     }
+
+    private static string EscapeLikeWildcards(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_").Replace("[", "\\[");
 }
 ```
 
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `dotnet test tests/FreightSnapIngestService.Tests --filter FreightScanRepositoryTests`
-Expected: PASS (2 tests) — requires `(localdb)\MSSQLLocalDB` to be available
+Expected: PASS (3 tests) — requires `(localdb)\MSSQLLocalDB` to be available
 
 - [ ] **Step 7: Commit**
 
@@ -1340,8 +1397,7 @@ public class IngestPipelineTests : IDisposable
         NullLogger<IngestPipeline>.Instance);
 
     private const string ValidCsv =
-        "Barcode,DateTime,Length,Width,Height,Volume,Weight\n" +
-        "012345678905,2026-08-13T09:15:00,12.5,8.0,6.25,625.0,14.2\n";
+        "012345678905,20260813091500,12.5,8.0,6.25,625.0,14.2\n";
 
     private string WriteCsv(string fileName, string content)
     {
@@ -1423,7 +1479,7 @@ public class IngestPipelineTests : IDisposable
     [Fact]
     public async Task Moves_a_malformed_csv_to_the_error_directory_immediately()
     {
-        WriteCsv("bad.csv", "Barcode,DateTime\nonly,two,columns\n");
+        WriteCsv("bad.csv", "only,two\n");
         var pipeline = CreatePipeline();
 
         await pipeline.ProcessOnceAsync(CancellationToken.None);
@@ -2189,21 +2245,236 @@ git commit -m "feat: wire up DI, enable Windows Service hosting, and document de
 
 ---
 
-## Manual Verification (post-implementation)
+### Task 13: Automated end-to-end verification with real-data-derived datasets
 
-After Task 12 is complete, do an end-to-end smoke test before considering the
-service production-ready:
+**Files:**
+- Create: `tests/FreightSnapIngestService.Tests/EndToEnd/EndToEndIngestionTests.cs`
 
-1. Apply `db/schema.sql` to a real (non-test) SQL Server database.
-2. Set `appsettings.json` directories to real local folders and the connection
-   string to that database.
-3. Run `dotnet run --project src/FreightSnapIngestService`.
-4. Drop a sample CSV (`Barcode,DateTime,Length,Width,Height,Volume,Weight`) into
-   `CsvDirectory` and a same-barcode-named image into `ImageDirectory`.
-5. Confirm within ~20 seconds: the files appear under
-   `ProcessedDirectory/<Barcode>_<Timestamp>/` renamed as specified, and a
-   matching row exists in `dbo.FreightScans` joined to `dbo.FreightScanImages`.
-6. Drop a CSV with a barcode that has no matching image; confirm it stays in
-   `CsvDirectory` and is only finalized (without images) after
-   `PendingTimeoutMinutes`.
-7. Drop a malformed CSV; confirm it moves to `ErrorDirectory` immediately.
+**Interfaces:**
+- Consumes every production type from Tasks 1–11 directly, unfaked: `IngestPipeline`, `RetentionCleaner`, `FreightScanRepository`/`IFreightScanRepository`, `SqlServerTestFixture` (Task 7), `CsvScanParser`, `ImageMatcher`, `ScanFileNamer`, `PendingScanTracker`, `FileStabilityTracker`, `FreightIngestOptions`. Only the clock is faked (`FakeTimeProvider`, injected into `PendingScanTracker` and `RetentionCleaner`) for deterministic timing; CSV parsing, image matching, file moves, and SQL Server reads/writes all run for real, against the real local database.
+- Produces: no new production types. This is a test-only task, dispatched after Task 12 once the full service exists.
+
+This replaces manual smoke-testing with an automated suite. Its scenarios are
+derived directly from real production data inspected in `Demo_Data/SWAD_FILES/*.csv`
+and `Demo_Data/Images/*.jpg` — headerless CSV rows, `yyyyMMddHHmmss` timestamps,
+`<barcode>_<yyyyMMdd>_<HHmmss>_<n>.<ext>` image names, a noisy barcode field
+(`vvhjmfvjhfg724076`), a truncated row shape, and the observed `555`/`5555`
+barcode-substring collision — rather than synthetic placeholder values.
+
+- [ ] **Step 1: Write the end-to-end test file**
+
+```csharp
+// tests/FreightSnapIngestService.Tests/EndToEnd/EndToEndIngestionTests.cs
+using FreightSnapIngestService.Csv;
+using FreightSnapIngestService.Db;
+using FreightSnapIngestService.Images;
+using FreightSnapIngestService.Ingestion;
+using FreightSnapIngestService.Naming;
+using FreightSnapIngestService.Options;
+using FreightSnapIngestService.Pending;
+using FreightSnapIngestService.Retention;
+using FreightSnapIngestService.Stability;
+using FreightSnapIngestService.Tests.Db;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+using Xunit;
+
+namespace FreightSnapIngestService.Tests.EndToEnd;
+
+public class EndToEndIngestionTests : IClassFixture<SqlServerTestFixture>, IDisposable
+{
+    private readonly SqlServerTestFixture _sqlFixture;
+    private readonly string _root;
+    private readonly FreightIngestOptions _options;
+    private readonly FakeTimeProvider _time = new();
+    private readonly IFreightScanRepository _repository;
+    private readonly IngestPipeline _pipeline;
+    private readonly RetentionCleaner _retentionCleaner;
+
+    public EndToEndIngestionTests(SqlServerTestFixture sqlFixture)
+    {
+        _sqlFixture = sqlFixture;
+        _root = Directory.CreateTempSubdirectory("e2e-ingest-tests-").FullName;
+        _options = new FreightIngestOptions
+        {
+            CsvDirectory = Path.Combine(_root, "csv"),
+            ImageDirectory = Path.Combine(_root, "images"),
+            ProcessedDirectory = Path.Combine(_root, "processed"),
+            ErrorDirectory = Path.Combine(_root, "errors"),
+            PendingTimeoutMinutes = 30,
+            RetentionDays = 30,
+        };
+        Directory.CreateDirectory(_options.CsvDirectory);
+        Directory.CreateDirectory(_options.ImageDirectory);
+
+        _repository = new FreightScanRepository(_sqlFixture.ConnectionString);
+        _pipeline = new IngestPipeline(
+            _options,
+            new CsvScanParser(),
+            new ImageMatcher(),
+            new ScanFileNamer(),
+            new PendingScanTracker(_time),
+            new FileStabilityTracker(),
+            _repository,
+            NullLogger<IngestPipeline>.Instance);
+        _retentionCleaner = new RetentionCleaner(_options, _repository, _time);
+    }
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    private string WriteCsv(string fileName, string content)
+    {
+        var path = Path.Combine(_options.CsvDirectory, fileName);
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    private string WriteImage(string fileName)
+    {
+        var path = Path.Combine(_options.ImageDirectory, fileName);
+        File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+        return path;
+    }
+
+    private async Task<(DateTime? ScanDateTime, string? CsvPath, int ImageCount)> ReadScanAsync(string barcode)
+    {
+        await using var conn = new SqlConnection(_sqlFixture.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var scanCmd = conn.CreateCommand();
+        scanCmd.CommandText =
+            "SELECT TOP 1 Id, ScanDateTime, CsvPath FROM dbo.FreightScans WHERE Barcode = @Barcode ORDER BY Id DESC";
+        scanCmd.Parameters.AddWithValue("@Barcode", barcode);
+        await using var reader = await scanCmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return (null, null, 0);
+
+        var scanId = reader.GetInt64(0);
+        var scanDateTime = reader.GetDateTime(1);
+        var csvPath = reader.IsDBNull(2) ? null : reader.GetString(2);
+        await reader.CloseAsync();
+
+        await using var imageCmd = conn.CreateCommand();
+        imageCmd.CommandText = "SELECT COUNT(*) FROM dbo.FreightScanImages WHERE FreightScanId = @Id";
+        imageCmd.Parameters.AddWithValue("@Id", scanId);
+        var imageCount = (int)(await imageCmd.ExecuteScalarAsync())!;
+
+        return (scanDateTime, csvPath, imageCount);
+    }
+
+    [Fact]
+    public async Task Ingests_a_realistic_multi_image_scan_matching_production_CSV_and_image_formats()
+    {
+        // Real row from Demo_Data/SWAD_FILES/20260804_144435_1.csv: headerless, yyyyMMddHHmmss datetime.
+        WriteCsv("scan.csv", "724076,20260804144415,122.0,101.5,128.5,1.591216,216.000\n");
+        // Real image naming convention from Demo_Data/Images: <barcode>_<yyyyMMdd>_<HHmmss>_<n>.jpg
+        WriteImage("724076_20260804_144420_1.jpg");
+        WriteImage("724076_20260804_144420_2.jpg");
+
+        await _pipeline.ProcessOnceAsync(CancellationToken.None); // stability baseline
+        await _pipeline.ProcessOnceAsync(CancellationToken.None); // finalizes
+
+        var scan = await ReadScanAsync("724076");
+        Assert.Equal(new DateTime(2026, 8, 4, 14, 44, 15), scan.ScanDateTime);
+        Assert.Equal(2, scan.ImageCount);
+        Assert.NotNull(scan.CsvPath);
+        Assert.True(File.Exists(scan.CsvPath));
+
+        var processedFolder = Path.Combine(_options.ProcessedDirectory, "724076_20260804144415");
+        Assert.True(File.Exists(Path.Combine(processedFolder, "724076_20260804144415_1.jpg")));
+        Assert.True(File.Exists(Path.Combine(processedFolder, "724076_20260804144415_2.jpg")));
+    }
+
+    [Fact]
+    public async Task Does_not_cross_match_images_between_a_barcode_and_its_digit_substring_collision()
+    {
+        // Real Demo_Data/Images collision: barcode "555" is a literal substring of barcode "5555".
+        WriteCsv("scan.csv", "555,20260807151435,50.0,40.0,30.0,0.060000,5.000\n");
+        WriteImage("555_20260807_151435_1.jpg");
+        WriteImage("555_20260807_151435_2.jpg");
+        WriteImage("5555_20260807_151343_1.jpg");
+        WriteImage("5555_20260807_151343_2.jpg");
+
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+
+        var scan = await ReadScanAsync("555");
+        Assert.Equal(2, scan.ImageCount); // only its own two images, not the 5555 pair
+
+        // The unrelated barcode's images were never touched by the "555" scan.
+        Assert.True(File.Exists(Path.Combine(_options.ImageDirectory, "5555_20260807_151343_1.jpg")));
+        Assert.True(File.Exists(Path.Combine(_options.ImageDirectory, "5555_20260807_151343_2.jpg")));
+    }
+
+    [Fact]
+    public async Task Finalizes_a_noisy_barcode_without_images_after_the_pending_timeout()
+    {
+        // Real Demo_Data anomaly: a barcode field with extra leading characters
+        // (Demo_Data/SWAD_FILES/20260804_144537_1.csv).
+        WriteCsv("scan.csv", "vvhjmfvjhfg724076,20260804144524,122.0,101.5,128.5,1.591216,216.000\n");
+
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+        await _pipeline.ProcessOnceAsync(CancellationToken.None); // now pending, no images
+        _time.Advance(TimeSpan.FromMinutes(31));
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+
+        var scan = await ReadScanAsync("vvhjmfvjhfg724076");
+        Assert.Equal(0, scan.ImageCount);
+        Assert.NotNull(scan.CsvPath);
+    }
+
+    [Fact]
+    public async Task Routes_a_truncated_production_style_row_to_the_error_directory()
+    {
+        // Real row shape with the trailing Weight field dropped (simulates a truncated write).
+        WriteCsv("truncated.csv", "714826,20260812213052,114.0,103.0,167.5,1.966785\n");
+
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(_options.ErrorDirectory, "truncated.csv")));
+        var scan = await ReadScanAsync("714826");
+        Assert.Null(scan.ScanDateTime);
+    }
+
+    [Fact]
+    public async Task Retention_clears_file_paths_but_keeps_the_scan_row_after_files_expire()
+    {
+        WriteCsv("scan.csv", "714826,20260812213052,114.0,103.0,167.5,1.966785,215.000\n");
+        WriteImage("714826_20260812_213100_1.jpg");
+
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+        await _pipeline.ProcessOnceAsync(CancellationToken.None);
+
+        var processedFolder = Path.Combine(_options.ProcessedDirectory, "714826_20260812213052");
+        Directory.SetLastWriteTimeUtc(processedFolder, DateTime.UtcNow.AddDays(-31));
+        _time.SetUtcNow(DateTimeOffset.UtcNow);
+
+        await _retentionCleaner.RunOnceAsync(CancellationToken.None);
+
+        Assert.False(Directory.Exists(processedFolder));
+        var scan = await ReadScanAsync("714826");
+        Assert.Equal(new DateTime(2026, 8, 12, 21, 30, 52), scan.ScanDateTime); // scan row still present
+        Assert.Null(scan.CsvPath); // path cleared
+        Assert.Equal(0, scan.ImageCount); // image rows cleared
+    }
+}
+```
+
+- [ ] **Step 2: Run the suite to verify it passes**
+
+Run: `dotnet test tests/FreightSnapIngestService.Tests --filter EndToEndIngestionTests`
+Expected: PASS (5 tests) — requires the same reachable SQL Server instance `SqlServerTestFixture` (Task 7) uses
+
+- [ ] **Step 3: Run the full solution test suite once more**
+
+Run: `dotnet test FreightSnapIngestService.sln`
+Expected: PASS — every test from Tasks 1–13
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add tests/FreightSnapIngestService.Tests/EndToEnd
+git commit -m "test: add automated end-to-end verification derived from real production data"
+```
