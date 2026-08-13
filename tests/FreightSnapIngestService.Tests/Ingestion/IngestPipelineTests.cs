@@ -157,6 +157,43 @@ public class IngestPipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task Routes_a_duplicate_redelivered_csv_to_the_error_directory_without_a_second_db_insert()
+    {
+        // Same barcode + same yyyyMMddHHmmss timestamp deterministically produces the same
+        // destination folder/CSV name, so this simulates the exact same scan being dropped
+        // twice (e.g. a re-delivered file from an upstream retry).
+        WriteCsv("scan1.csv", ValidCsv);
+        WriteImage("012345678905_1.jpg");
+        var pipeline = CreatePipeline();
+
+        await pipeline.ProcessOnceAsync(CancellationToken.None); // stability baseline
+        await pipeline.ProcessOnceAsync(CancellationToken.None); // finalizes the first delivery
+
+        Assert.Single(_repository.Inserted);
+        var processedFolder = Path.Combine(_options.ProcessedDirectory, "012345678905_20260813091500");
+        Assert.True(File.Exists(Path.Combine(processedFolder, "012345678905_20260813091500.csv")));
+
+        // Re-deliver the identical scan under a different source file name (the destination
+        // name is what collides) with a fresh matching image.
+        WriteCsv("scan1_redelivered.csv", ValidCsv);
+        WriteImage("012345678905_1.jpg");
+
+        await pipeline.ProcessOnceAsync(CancellationToken.None); // stability baseline
+        await pipeline.ProcessOnceAsync(CancellationToken.None); // detects the duplicate
+
+        Assert.Single(_repository.Inserted); // no second DB insert
+        Assert.True(File.Exists(Path.Combine(_options.ErrorDirectory, "scan1_redelivered.csv")));
+        Assert.False(File.Exists(Path.Combine(_options.CsvDirectory, "scan1_redelivered.csv")));
+        // The duplicate is detected before any image moves are attempted.
+        Assert.True(File.Exists(Path.Combine(_options.ImageDirectory, "012345678905_1.jpg")));
+
+        // A further poll must not re-discover or re-process the CSV: it is gone from
+        // CsvDirectory, so it can never jam in a permanent retry loop.
+        await pipeline.ProcessOnceAsync(CancellationToken.None);
+        Assert.Single(_repository.Inserted);
+    }
+
+    [Fact]
     public async Task Restores_the_original_files_when_the_database_insert_fails()
     {
         WriteCsv("scan1.csv", ValidCsv);

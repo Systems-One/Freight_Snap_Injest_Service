@@ -91,21 +91,62 @@ public class IngestPipeline(
                 scan.Barcode, csvPath, options.PendingTimeoutMinutes);
         }
 
-        await FinalizeAsync(csvPath, scan, matchedImages, ct);
-        pendingTracker.Remove(csvPath);
-        _stableCsvPaths.Remove(csvPath);
-        logger.LogInformation(
-            "Finalized barcode {Barcode} ({CsvPath}) with {ImageCount} image(s).",
-            scan.Barcode, csvPath, matchedImages.Count);
+        var outcome = await FinalizeAsync(csvPath, scan, matchedImages, ct);
+        switch (outcome)
+        {
+            case FinalizeOutcome.Finalized:
+                pendingTracker.Remove(csvPath);
+                _stableCsvPaths.Remove(csvPath);
+                logger.LogInformation(
+                    "Finalized barcode {Barcode} ({CsvPath}) with {ImageCount} image(s).",
+                    scan.Barcode, csvPath, matchedImages.Count);
+                break;
+            case FinalizeOutcome.DuplicateSkipped:
+                // The CSV has been moved to ErrorDirectory; it no longer exists in CsvDirectory
+                // so it will not be seen again on the next poll.
+                pendingTracker.Remove(csvPath);
+                _stableCsvPaths.Remove(csvPath);
+                break;
+            case FinalizeOutcome.Failed:
+                // Any moved files were already reverted to their original locations inside
+                // FinalizeAsync so the CSV is retried on the next poll cycle; the failure was
+                // already logged there, so there is nothing further to do (or log) here.
+                break;
+        }
     }
 
-    private async Task FinalizeAsync(string csvPath, Models.ScanRecord scan, IReadOnlyList<string> matchedImages, CancellationToken ct)
+    private enum FinalizeOutcome
+    {
+        Finalized,
+        DuplicateSkipped,
+        Failed,
+    }
+
+    private async Task<FinalizeOutcome> FinalizeAsync(string csvPath, Models.ScanRecord scan, IReadOnlyList<string> matchedImages, CancellationToken ct)
     {
         var folderName = fileNamer.BuildProcessedFolderName(scan.Barcode, scan.ScanDateTime);
         var destinationFolder = Path.Combine(options.ProcessedDirectory, folderName);
-        Directory.CreateDirectory(destinationFolder);
-
         var destinationCsvPath = Path.Combine(destinationFolder, fileNamer.BuildCsvFileName(scan.Barcode, scan.ScanDateTime));
+
+        // Same barcode + same yyyyMMddHHmmss timestamp deterministically produces the same
+        // destination folder/CSV name. If the destination CSV already exists, this scan was
+        // already processed (a re-dropped/duplicate CSV) — route it to ErrorDirectory instead
+        // of attempting image moves and a DB insert for a scan that's already handled. Doing
+        // this check first (before creating the destination folder or moving anything) avoids
+        // an unhandled File.Move collision that would otherwise leave the CSV stuck in
+        // CsvDirectory and retried, and failing, on every single poll forever.
+        if (File.Exists(destinationCsvPath))
+        {
+            logger.LogWarning(
+                "Barcode {Barcode} ({CsvPath}) looks like a duplicate/re-delivered scan — {DestinationCsvPath} " +
+                "already exists from a previous run. Moving it to the error directory instead of reprocessing.",
+                scan.Barcode, csvPath, destinationCsvPath);
+            Directory.CreateDirectory(options.ErrorDirectory);
+            File.Move(csvPath, Path.Combine(options.ErrorDirectory, Path.GetFileName(csvPath)), overwrite: true);
+            return FinalizeOutcome.DuplicateSkipped;
+        }
+
+        Directory.CreateDirectory(destinationFolder);
         File.Move(csvPath, destinationCsvPath);
 
         var destinationImagePaths = new List<string>();
@@ -129,9 +170,11 @@ public class IngestPipeline(
         }
         catch (Exception ex)
         {
+            // This catch guards both the image-move loop and the DB insert above, so the
+            // message must stay accurate for either cause rather than naming just one.
             logger.LogError(
                 ex,
-                "Database insert failed for barcode {Barcode} ({CsvPath}); reverting file moves for retry.",
+                "Finalize failed for barcode {Barcode} ({CsvPath}); reverting file moves for retry.",
                 scan.Barcode, csvPath);
 
             File.Move(destinationCsvPath, csvPath);
@@ -141,7 +184,9 @@ public class IngestPipeline(
             if (!Directory.EnumerateFileSystemEntries(destinationFolder).Any())
                 Directory.Delete(destinationFolder);
 
-            throw;
+            return FinalizeOutcome.Failed;
         }
+
+        return FinalizeOutcome.Finalized;
     }
 }
