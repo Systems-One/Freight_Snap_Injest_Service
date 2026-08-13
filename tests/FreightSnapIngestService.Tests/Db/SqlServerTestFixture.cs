@@ -6,12 +6,12 @@ namespace FreightSnapIngestService.Tests.Db;
 public class SqlServerTestFixture : IAsyncLifetime
 {
     private const string MasterConnectionString =
-        @"Server=(localdb)\MSSQLLocalDB;Database=master;Trusted_Connection=True;TrustServerCertificate=True;";
+        @"Server=.;Database=master;Trusted_Connection=True;TrustServerCertificate=True;";
 
     public string DatabaseName { get; } = $"FreightSnapIngestTest_{Guid.NewGuid():N}";
 
     public string ConnectionString =>
-        $@"Server=(localdb)\MSSQLLocalDB;Database={DatabaseName};Trusted_Connection=True;TrustServerCertificate=True;";
+        $@"Server=.;Database={DatabaseName};Trusted_Connection=True;TrustServerCertificate=True;";
 
     public async Task InitializeAsync()
     {
