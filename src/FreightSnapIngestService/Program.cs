@@ -1,3 +1,4 @@
+using FreightSnapIngestService;
 using FreightSnapIngestService.Csv;
 using FreightSnapIngestService.Db;
 using FreightSnapIngestService.Images;
@@ -8,6 +9,13 @@ using FreightSnapIngestService.Pending;
 using FreightSnapIngestService.Retention;
 using FreightSnapIngestService.Stability;
 using Serilog;
+
+// The Windows Service Control Manager launches this process with
+// Environment.CurrentDirectory set to C:\Windows\System32, and AddWindowsService()
+// does not change that. Relative paths (notably the Serilog file sink path in
+// appsettings.json) must resolve next to the executable, not System32, so pin the
+// working directory here before anything else (including host/config building) runs.
+Directory.SetCurrentDirectory(AppContext.BaseDirectory);
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -42,10 +50,16 @@ builder.Services.AddSingleton(sp => new IngestPipeline(
 builder.Services.AddSingleton(sp => new RetentionCleaner(
     sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<FreightIngestOptions>>().Value,
     sp.GetRequiredService<IFreightScanRepository>(),
-    sp.GetRequiredService<TimeProvider>()));
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<ILogger<RetentionCleaner>>()));
 
 builder.Services.AddHostedService<IngestWorker>();
 builder.Services.AddHostedService<RetentionWorker>();
 
 var host = builder.Build();
+
+var resolvedOptions = host.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<FreightIngestOptions>>().Value;
+var startupLogger = host.Services.GetRequiredService<ILogger<Program>>();
+StartupValidation.LogConfiguration(resolvedOptions, startupLogger);
+
 host.Run();

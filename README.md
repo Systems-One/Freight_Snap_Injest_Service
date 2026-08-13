@@ -9,6 +9,24 @@ for the full design.
 Edit `src/FreightSnapIngestService/appsettings.json` (or an environment-specific
 override) with real directory paths and connection string before publishing.
 
+The `FreightIngest` section supports the following keys:
+
+| Key                   | Meaning                                                                 | Default |
+|------------------------|--------------------------------------------------------------------------|---------|
+| `CsvDirectory`         | Folder polled for incoming scan CSV files.                              | —       |
+| `ImageDirectory`       | Folder polled for incoming barcode images to match against pending CSVs.| —       |
+| `ProcessedDirectory`   | Folder where successfully finalized CSV+image sets are moved.           | —       |
+| `ErrorDirectory`       | Folder where malformed or duplicate/re-delivered CSVs are moved.        | —       |
+| `PollIntervalSeconds`  | How often the ingest pipeline polls `CsvDirectory` for new files.       | `10`    |
+| `PendingTimeoutMinutes`| How long a CSV waits for matching images before finalizing without them.| `30`    |
+| `RetentionDays`        | How long processed folders and error files are kept before cleanup.     | `30`    |
+| `ConnectionString`     | SQL Server connection string used for `dbo.FreightScans` inserts.       | —       |
+
+`CsvDirectory`, `ImageDirectory`, `ProcessedDirectory`, and `ErrorDirectory` should be
+absolute paths. At startup the service logs the resolved configuration once
+(with the connection string redacted) and logs a warning for any of these four
+directories that doesn't currently exist on disk.
+
 ## Deploy the database schema
 
 Run `db/schema.sql` against the target SQL Server database once, before starting
