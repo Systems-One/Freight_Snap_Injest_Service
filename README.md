@@ -1,13 +1,78 @@
 # Freight Snap Ingest Service
 
-Windows Service that ingests CSV scan records and matched barcode images
-into SQL Server. See `docs/superpowers/specs/2026-08-13-freight-snap-ingest-service-design.md`
-for the full design.
+A Windows Service that ingests CSV scan records and matched barcode images from a freight dimensioning/scale system, writes them to Microsoft SQL Server, organizes the source files into a processed archive, and cleans up expired output on a configurable retention schedule — while keeping every scan's measurement data permanently, even after its files are gone.
+
+[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+## Overview
+
+Upstream freight-scanning hardware drops two kinds of files into watch folders: a small CSV per scan (barcode, timestamp, dimensions, weight) and one or more barcode photos. This service:
+
+1. **Polls and parses** incoming CSVs once their size is stable across two consecutive polls (guarding against reading a file mid-write).
+2. **Matches** each scan to its barcode photos, waiting up to a configurable timeout for images that arrive slightly after their CSV.
+3. **Persists** the scan and its image references to SQL Server in a single transaction.
+4. **Archives** the CSV and images into a per-scan processed folder, renamed to a consistent `<Barcode>_<Timestamp>` convention.
+5. **Retires** processed and error output after a configurable retention window — deleting files and clearing their database path references, but never the scan's measurement data itself.
+
+Downstream systems (e.g. a WMS) never need FTP/API integration with this service — they simply query the database for scans with live file paths.
+
+## Architecture
+
+Two independent `BackgroundService` loops, wired together with dependency injection:
+
+| Component | Responsibility |
+|---|---|
+| `IngestWorker` | Polls on a configurable interval, driving `IngestPipeline` |
+| `IngestPipeline` | Orchestrates: stability check → parse → image match → finalize/rollback |
+| `CsvScanParser` | Parses the headerless, positional scan CSV format |
+| `ImageMatcher` | Matches barcode photos to a scan via digit-boundary filename matching |
+| `ScanFileNamer` | Derives the archived folder/file naming convention |
+| `PendingScanTracker` / `FileStabilityTracker` | Time-based state for the poll loop |
+| `FreightScanRepository` | Parameterized ADO.NET access to SQL Server |
+| `RetentionWorker` | Runs hourly, driving `RetentionCleaner` |
+| `RetentionCleaner` | Deletes expired output; clears DB paths first so a transient failure is self-healing |
+| `StartupValidation` | Logs resolved configuration and warns on missing directories at boot |
+
+Each collaborator is a small, single-responsibility class with a narrow interface, independently unit-tested. An [automated end-to-end suite](tests/FreightSnapIngestService.Tests/EndToEnd) exercises the real, unfaked pipeline against a real SQL Server instance, using scenarios derived from actual production data samples — including a barcode-substring collision (`555` vs `5555`) that a naive matcher would get wrong.
+
+## Prerequisites
+
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- A reachable SQL Server instance (LocalDB, Express, or full) for running the database-backed tests and for deployment
+
+## Project Structure
+
+```
+src/FreightSnapIngestService/
+  Csv/          CSV parsing
+  Images/       Barcode-to-image matching
+  Naming/       Archived file/folder naming
+  Pending/      Pending-scan timeout tracking
+  Stability/    File-write-stability detection
+  Db/           SQL Server schema + repository
+  Ingestion/    Pipeline orchestration + polling worker
+  Retention/    Cleanup logic + hourly worker
+  Options/      Strongly-typed configuration
+  Program.cs    DI wiring, Windows Service hosting
+tests/FreightSnapIngestService.Tests/
+  EndToEnd/     Real-stack tests against a real database
+  ...           Unit tests mirroring the src/ layout
+db/schema.sql   Deployable SQL Server schema
+docs/           Design spec and implementation plan
+```
+
+## Building and Testing
+
+```bash
+dotnet build FreightSnapIngestService.sln
+dotnet test FreightSnapIngestService.sln
+```
+
+The database-backed tests (repository and end-to-end suites) connect to `Server=.;Trusted_Connection=True;TrustServerCertificate=True;` by default and create/drop their own disposable databases per test run — point a reachable SQL Server instance there, or adjust the connection string in `tests/FreightSnapIngestService.Tests/Db/SqlServerTestFixture.cs`.
 
 ## Configure
 
-Edit `src/FreightSnapIngestService/appsettings.json` (or an environment-specific
-override) with real directory paths and connection string before publishing.
+Edit `src/FreightSnapIngestService/appsettings.json` (or an environment-specific override) with real directory paths and connection string before publishing.
 
 The `FreightIngest` section supports the following keys:
 
@@ -27,12 +92,12 @@ absolute paths. At startup the service logs the resolved configuration once
 (with the connection string redacted) and logs a warning for any of these four
 directories that doesn't currently exist on disk.
 
-## Deploy the database schema
+## Deploy the Database Schema
 
 Run `db/schema.sql` against the target SQL Server database once, before starting
 the service for the first time.
 
-## Publish and install as a Windows Service
+## Publish and Install as a Windows Service
 
 ```powershell
 dotnet publish src/FreightSnapIngestService -c Release -r win-x64 --self-contained false -o publish
@@ -59,3 +124,12 @@ Start-Service -Name "FreightSnapIngestService"
 Stop-Service -Name "FreightSnapIngestService"
 sc.exe delete "FreightSnapIngestService"
 ```
+
+## Design Documentation
+
+- [Design spec](docs/superpowers/specs/2026-08-13-freight-snap-ingest-service-design.md) — architecture and requirements
+- [Implementation plan](docs/superpowers/plans/2026-08-13-freight-snap-ingest-service.md) — task-by-task build record
+
+## License
+
+MIT — see [LICENSE](LICENSE).

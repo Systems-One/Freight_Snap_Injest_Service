@@ -480,3 +480,9 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Claude Code session/worktree artifacts
+.claude/
+
+# Local sample/demo data used during development (not required to build or run)
+Demo_Data/
