@@ -59,13 +59,18 @@ public class FreightScanRepository(string connectionString) : IFreightScanReposi
         await conn.OpenAsync(ct);
         await using var transaction = (SqlTransaction)await conn.BeginTransactionAsync(ct);
 
+        // SQL LIKE treats '_', '%', and '[' as wildcards. The folder-naming convention is
+        // "{barcode}_{timestamp}", so every real prefix contains underscores that must be
+        // escaped — otherwise this could match and clear an unrelated scan's paths.
+        var escapedPrefix = EscapeLikeWildcards(folderPathPrefix);
+
         await using var deleteImages = conn.CreateCommand();
         deleteImages.Transaction = transaction;
         deleteImages.CommandText = """
             DELETE FROM dbo.FreightScanImages
-            WHERE ImagePath LIKE @Prefix + '%';
+            WHERE ImagePath LIKE @Prefix + '%' ESCAPE '\';
             """;
-        deleteImages.Parameters.AddWithValue("@Prefix", folderPathPrefix);
+        deleteImages.Parameters.AddWithValue("@Prefix", escapedPrefix);
         await deleteImages.ExecuteNonQueryAsync(ct);
 
         await using var clearCsvPath = conn.CreateCommand();
@@ -73,11 +78,14 @@ public class FreightScanRepository(string connectionString) : IFreightScanReposi
         clearCsvPath.CommandText = """
             UPDATE dbo.FreightScans
             SET CsvPath = NULL
-            WHERE CsvPath LIKE @Prefix + '%';
+            WHERE CsvPath LIKE @Prefix + '%' ESCAPE '\';
             """;
-        clearCsvPath.Parameters.AddWithValue("@Prefix", folderPathPrefix);
+        clearCsvPath.Parameters.AddWithValue("@Prefix", escapedPrefix);
         await clearCsvPath.ExecuteNonQueryAsync(ct);
 
         await transaction.CommitAsync(ct);
     }
+
+    private static string EscapeLikeWildcards(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_").Replace("[", "\\[");
 }

@@ -73,4 +73,37 @@ public class FreightScanRepositoryTests : IClassFixture<SqlServerTestFixture>
         var imageCount = (int)(await imageCmd.ExecuteScalarAsync())!;
         Assert.Equal(0, imageCount);
     }
+
+    [Fact]
+    public async Task ClearPathsUnderFolderAsync_does_not_clear_a_different_scan_whose_path_only_matches_via_the_underscore_wildcard()
+    {
+        // SQL LIKE treats '_' as "match any single character." The real folder-naming
+        // convention is "{barcode}_{timestamp}", so every prefix contains underscores —
+        // ClearPathsUnderFolderAsync must escape them, or a prefix like ".../AAA_1" would
+        // also match an unrelated path like ".../AAAX1" purely via wildcard substitution.
+        var repository = new FreightScanRepository(_fixture.ConnectionString);
+        var targetFolder = @"C:\FreightSnap\processed\AAA_1";
+        var targetCsvPath = $@"{targetFolder}\AAA_1.csv";
+        var targetScan = Scan with { Barcode = "AAA1TARGET" };
+        var targetScanId = await repository.InsertScanAsync(targetScan, targetCsvPath, Array.Empty<string>(), CancellationToken.None);
+
+        var otherCsvPath = @"C:\FreightSnap\processed\AAAX1\AAAX1.csv"; // same length, '_' replaced by 'X'
+        var otherScan = Scan with { Barcode = "AAAXOTHER" };
+        var otherScanId = await repository.InsertScanAsync(otherScan, otherCsvPath, Array.Empty<string>(), CancellationToken.None);
+
+        await repository.ClearPathsUnderFolderAsync(targetFolder, CancellationToken.None);
+
+        await using var conn = new SqlConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var targetCmd = conn.CreateCommand();
+        targetCmd.CommandText = "SELECT CsvPath FROM dbo.FreightScans WHERE Id = @Id";
+        targetCmd.Parameters.AddWithValue("@Id", targetScanId);
+        Assert.Equal(DBNull.Value, await targetCmd.ExecuteScalarAsync());
+
+        await using var otherCmd = conn.CreateCommand();
+        otherCmd.CommandText = "SELECT CsvPath FROM dbo.FreightScans WHERE Id = @Id";
+        otherCmd.Parameters.AddWithValue("@Id", otherScanId);
+        Assert.Equal(otherCsvPath, await otherCmd.ExecuteScalarAsync());
+    }
 }
