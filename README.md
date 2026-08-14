@@ -2,7 +2,7 @@
 
 A Windows Service that ingests CSV scan records and matched barcode images from a freight dimensioning/scale system, writes them to Microsoft SQL Server, organizes the source files into a processed archive, and cleans up expired output on a configurable retention schedule — while keeping every scan's measurement data permanently, even after its files are gone.
 
-[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Build, Test and Package Installer](https://github.com/Jwagener1/Freight_Snap_Injest_Service/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/Jwagener1/Freight_Snap_Injest_Service/actions/workflows/build-and-release.yml) [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
 
@@ -68,7 +68,19 @@ dotnet build FreightSnapIngestService.sln
 dotnet test FreightSnapIngestService.sln
 ```
 
-The database-backed tests (repository and end-to-end suites) connect to `Server=.;Trusted_Connection=True;TrustServerCertificate=True;` by default and create/drop their own disposable databases per test run — point a reachable SQL Server instance there, or adjust the connection string in `tests/FreightSnapIngestService.Tests/Db/SqlServerTestFixture.cs`.
+The database-backed tests (repository and end-to-end suites) connect to `(localdb)\MSSQLLocalDB` by default and create/drop their own disposable databases per test run — this matches what's pre-installed on GitHub-hosted Windows runners, so CI works out of the box. To point at a different reachable instance locally (e.g. a full local SQL Server install), set the `FREIGHT_TEST_SQL_SERVER` environment variable to its server name (e.g. `.` for the local default instance) before running `dotnet test`.
+
+## Continuous Integration
+
+```
+Push to main → [Run Tests] → Pass? → [Build + Package Installer] → GitHub Release
+                                ↓ Fail
+                            Build blocked
+```
+
+Pull requests targeting `main` run the same test job. `main` is protected: merging requires
+an open pull request with the test job green — direct pushes and merges with failing or pending
+tests are rejected.
 
 ## Configure
 
@@ -98,6 +110,17 @@ Run `db/schema.sql` against the target SQL Server database once, before starting
 the service for the first time.
 
 ## Publish and Install as a Windows Service
+
+### Installer (recommended)
+
+Every push to `main` that passes CI builds `Freight_Snap_Ingest_Service_Setup.exe` and attaches
+it to a [GitHub Release](https://github.com/Jwagener1/Freight_Snap_Injest_Service/releases). Run
+it as Administrator — it publishes the app, installs it as a Windows Service
+(`FreightSnapIngestService`, auto-start with restart-on-failure), and preserves an existing
+`appsettings.json` across upgrades. Then apply `db/schema.sql` (included alongside the install)
+and edit `appsettings.json` in the install directory as described above.
+
+### Manual
 
 ```powershell
 dotnet publish src/FreightSnapIngestService -c Release -r win-x64 --self-contained false -o publish

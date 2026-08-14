@@ -5,13 +5,20 @@ namespace FreightSnapIngestService.Tests.Db;
 
 public class SqlServerTestFixture : IAsyncLifetime
 {
-    private const string MasterConnectionString =
-        @"Server=.;Database=master;Trusted_Connection=True;TrustServerCertificate=True;";
+    // Defaults to LocalDB, which ships pre-installed on GitHub-hosted Windows runners
+    // (and most dev machines with Visual Studio/SQL tooling). Override with the
+    // FREIGHT_TEST_SQL_SERVER environment variable to point at a different reachable
+    // instance, e.g. "." for a full local SQL Server / SQL Server Express install.
+    private static readonly string ServerInstance =
+        Environment.GetEnvironmentVariable("FREIGHT_TEST_SQL_SERVER") ?? @"(localdb)\MSSQLLocalDB";
+
+    private static string MasterConnectionString =>
+        $@"Server={ServerInstance};Database=master;Trusted_Connection=True;TrustServerCertificate=True;";
 
     public string DatabaseName { get; } = $"FreightSnapIngestTest_{Guid.NewGuid():N}";
 
     public string ConnectionString =>
-        $@"Server=.;Database={DatabaseName};Trusted_Connection=True;TrustServerCertificate=True;";
+        $@"Server={ServerInstance};Database={DatabaseName};Trusted_Connection=True;TrustServerCertificate=True;";
 
     public async Task InitializeAsync()
     {

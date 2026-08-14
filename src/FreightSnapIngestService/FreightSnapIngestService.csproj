@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-FreightSnapIngestService-581205fb-a27d-4e34-adff-8c51c7df044a</UserSecretsId>
     <UseWindowsService>true</UseWindowsService>
+    <ApplicationIcon>..\..\Icons\systems_one.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,5 +17,12 @@
     <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\Icons\systems_one.ico">
+      <Link>Icons\systems_one.ico</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>
