@@ -11,6 +11,13 @@ Built by Systems One for sites that need the scan data in a database that other 
 </div>
 
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/systems-one-dark.png">
+    <img src="docs/assets/systems-one.png" height="52" alt="Systems One">
+  </picture>
+</p>
+
+<p align="center">
   <a href="https://github.com/Systems-One/Freight_Snap_Injest_Service/releases/latest"><b>Latest release</b></a> &middot;
   <a href="#documentation">Documentation</a> &middot;
   <a href="docs/superpowers/specs/2026-08-13-freight-snap-ingest-service-design.md">Design spec</a> &middot;
